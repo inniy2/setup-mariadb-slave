@@ -1,2 +1,2 @@
-Host 192.168.x.x
+Host 172.31.x.x
     StrictHostKeyChecking no

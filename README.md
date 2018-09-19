@@ -17,59 +17,38 @@ ssh vagrant@$test_host
 cd $git_home_vagrant/master && vagrant destroy -f && cd ../slave1 && vagrant destroy -f && cd ../slave2 && vagrant destroy -f
 ```
 
-1. OS setup  
+1. Percona toolkit installation
 ```bash
-sudo yum install -y wget vim screen
-
 cd /tmp
 
-sudo wget http://dl.fedoraproject.org/pub/epel/epel-release-latest-7.noarch.rpm
+wget https://repo.percona.com/apt/percona-release_0.1-6.$(lsb_release -sc)_all.deb
 
-sudo rpm -ivh /tmp/epel-release-latest-7.noarch.rpm 
+sudo dpkg -i percona-release_0.1-6.$(lsb_release -sc)_all.deb
 
-sudo wget http://www.percona.com/downloads/percona-release/redhat/0.1-4/percona-release-0.1-4.noarch.rpm
+sudo apt-get update
 
-sudo yum -y install http://www.percona.com/downloads/percona-release/redhat/0.1-4/percona-release-0.1-4.noarch.rpm 
+sudo apt-cache search percona
+sudo apt-cache search qpress
+
+sudo apt-get install percona-toolkit percona-xtrabackup-24 qpress
 ```
-
-2. Copy percona-release.repo  
-```bash
-sudo vi /etc/yum.repos.d/percona-release.repo
-```
-> ADD  
-[percon-release.repo](percona-release-enable.repo)  
-
-3. Install additional pakages
-```bash
-sudo yum -y install percona-toolkit.x86_64 percona-xtrabackup-24.x86_64 qpress.x86_64
-```
-
-4. If Additional OS user is required  
-```bash
-sudo groupadd sangsunbae -g 57000
-sudo useradd sangsunbae  -u 57000 -g 57000 -G sangsunbae -d /home/sangsunbae -m -s /bin/bash -c 'admin user'
-
-sudo touch  /etc/sudoers.d/sangsunbae
-sudo visudo -f /etc/sudoers.d/sangsunbae
-```
-> ADD
-[sangsunbae](sangsunbae)
 
 
 5. ssh-keygen  (On master)
 ```bash
-sangsunbae> ssh-keygen -f /home/sangsunbae/.ssh/id_rsa -C sangsunbae
+testuser> ssh-keygen -f /home/testuser/.ssh/id_rsa -C testuser
 
-sangsunbae> touch ~/.ssh/authorized_keys
+testuser> touch ~/.ssh/authorized_keys
 
-sangsunbae> cat ~/.ssh/id_rsa.pub > ~/.ssh/authorized_keys
+testuser> cat ~/.ssh/id_rsa.pub > ~/.ssh/authorized_keys
 
-sangsunbae> sudo chmod 755 ~/.ssh
-sangsunbae> sudo chmod 600 ~/.ssh/*
+testuser> sudo chmod 755 ~/.ssh
+testuser> sudo chmod 600 ~/.ssh/*
 
 tar cvfPz /tmp/id_rsa_pair.tar.gz  -C ~/.ssh id_rsa  id_rsa.pub authorized_keys
 
-sangsunbae> vim ~/.ssh/config && chmod 600 ~/.ssh/config
+testuser> vim ~/.ssh/config 
+testuser> chmod 600 ~/.ssh/config
 ```
 > ADD  
 [ssh/config](ssh-config)
@@ -79,46 +58,9 @@ sangsunbae> vim ~/.ssh/config && chmod 600 ~/.ssh/config
 ```bash
 export test_host=
 
-scp /tmp/id_rsa_pair.tar.gz  vagrant@$test_host:/tmp
+scp /tmp/id_rsa_pair.tar.gz  $test_host:/tmp
 
-sangsunbae> tar xvfPz /tmp/id_rsa_pair.tar.gz -C ~/.ssh/
-```
-
-7. Disable percona-release.repo
-```bash
-sudo vim /etc/yum.repos.d/percona-release.repo
-```
-> ADD  
-[percon-release.repo](percona-release-disable.repo)  
-
-8. MariaDB repo
-```bash
-sudo vim /etc/yum.repos.d/mariadb.repo 
-```
-> ADD  
-[mariadb.repo](mariadb.repo)
-
-9. Install mariadb  
-```bash
-sudo yum -y install MariaDB-server MariaDB-client
-```
-
-10. Set my.cnf  
-```bash
-sudo vim /etc/my.cnf
-```
-> ADD  
-[master](master.cnf)
-[slave1](slave1.cnf)
-[slave2](slave2.cnf)
-
-11. Start mariadb
-```bash
-sudo mkdir /var/log/mariadb && sudo touch /var/log/mariadb/mariadb.log
-sudo chown -R mysql:mysql /var/log/mariadb
-
-sudo systemctl start mariadb
-sudo mysql_secure_installation 
+testuser> tar xvfPz /tmp/id_rsa_pair.tar.gz -C ~/.ssh/
 ```
 
 12. Add replication user on master  
@@ -129,11 +71,32 @@ mysql> GRANT REPLICATION SLAVE ON *.* TO 'replication_user'@'%';
 
 mysql> CREATE USER 'pt_user'@'%' IDENTIFIED BY 'bigs3cret';
 mysql> GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, PROCESS, REPLICATION SLAVE, SUPER ON *.* TO 'pt_user'@'%';
+
+mysql> CREATE USER 'pt_user'@'localhost' IDENTIFIED BY 'bigs3cret';
+mysql> GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, PROCESS, REPLICATION SLAVE, SUPER ON *.* TO 'pt_user'@'localhost';
+
+mysql> CREATE USER 'pt_user'@'127.0.0.1' IDENTIFIED BY 'bigs3cret';
+mysql> GRANT SELECT, INSERT, UPDATE, DELETE, CREATE, DROP, PROCESS, REPLICATION SLAVE, SUPER ON *.* TO 'pt_user'@'127.0.0.1';
 ```
+
+
+12. Configuration change  
+```bash
+mysql> use mysql;
+
+mysql> set session sql_log_bin=0;
+
+mysql> set global sync_binlog = 1;
+
+mysql> set global innodb_flush_log_at_trx_commit =1 ;
+```
+
 
 12. Stop target mariadb && delete files (on slave)  
 ```bash
 sudo systemctl stop mariadb
+
+sudo tar cvfPz backup.tar.gz -C /var/lib mysql
 
 sudo rm -rf /var/lib/mysql/*
 
@@ -142,14 +105,13 @@ sudo chmod 777 /var/lib/mysql
 
 13. Take backup (On master)  
 ```bash
-export test_host=
+export test_host=172.31.32.196
 sudo innobackupex \
 --compress \
 --compress-threads=4 \
 --slave-info \
 --user=root \
---password=test\!\! \
---stream=xbstream /var/lib/mysql | ssh sangsunbae@$test_host "xbstream -x -C /var/lib/mysql"
+--stream=xbstream /var/lib/mysql | ssh testuser@$test_host "xbstream -x -C /var/lib/mysql"
 ```
 
 14. Restore mariadb (on slave)
@@ -162,7 +124,7 @@ sudo innobackupex \
 sudo find /var/lib/mysql -name "*.qp" -exec rm {} \;
 
 sudo innobackupex \
-    --defaults-file=my.cnf \
+    --defaults-file=/etc/mysql/my.cnf \
     --use-memory=1G \
     --apply-log  /var/lib/mysql
 
@@ -177,13 +139,19 @@ sudo cat /var/lib/mysql/xtrabackup_slave_info
 sudo cat /var/lib/mysql/xtrabackup_binlog_info
 
 mysql> CHANGE MASTER TO
-  MASTER_HOST='192.168.33.11',
+  MASTER_HOST='172.31.36.135',
   MASTER_USER='replication_user',
   MASTER_PASSWORD='bigs3cret',
   MASTER_PORT=3306,
-  MASTER_LOG_FILE='mariadb-bin.000002',
-  MASTER_LOG_POS=315,
+  MASTER_LOG_FILE='mariadb-bin.000009',
+  MASTER_LOG_POS=73338193,
   MASTER_CONNECT_RETRY=10;
+
+  STOP SLAVE;
+  SET GLOBAL gtid_slave_pos = '0-1-1830827';
+  CHANGE MASTER TO master_use_gtid=slave_pos;
+  START SLAVE;
+
 ```
 
 16. pt-table-checksum  
@@ -203,12 +171,12 @@ mysql> CREATE TABLE `dsns` (
   PRIMARY KEY (`id`)
 );
 
-mysql> INSERT INTO `dsns` (`id`,`parent_id`,`dsn`) values (1,1,"h=192.168.33.11,u=pt_user,p=bigs3cret,P=3306");
-mysql> INSERT INTO `dsns` (`id`,`parent_id`,`dsn`) values (2,2,"h=192.168.33.12,u=pt_user,p=bigs3cret,P=3306");
+mysql> INSERT INTO `dsns` (`id`,`parent_id`,`dsn`) values (1,1,"h=172.31.36.135,u=pt_user,p=bigs3cret,P=3306");
+mysql> INSERT INTO `dsns` (`id`,`parent_id`,`dsn`) values (2,2,"h=172.31.32.196,u=pt_user,p=bigs3cret,P=3307");
 ```
 
 ```bash
-export pt_master_host="192.168.33.10"
+export pt_master_host="127.0.0.1"
 
 pt-table-checksum \
 --config=/etc/percona-toolkit/percona-toolkit.conf \
@@ -217,4 +185,84 @@ pt-table-checksum \
 --host=$pt_master_host \
 --recursion-method=dsn=D=percona,t=dsns
 
+pt-table-checksum \
+--config=/etc/percona-toolkit/percona-toolkit.conf \
+--replicate=percona.checksums \
+--replicate-check-only \
+--ignore-databases=mysql  \
+--host=$pt_master_host \
+--recursion-method=dsn=D=percona,t=dsns
 ```
+
+90. Result
+```bash
+Starting checksum ...
+
+            TS ERRORS  DIFFS     ROWS  DIFF_ROWS  CHUNKS SKIPPED    TIME TABLE
+09-19T11:25:42      0      3 11056045          0      37       0  87.906 alpha.beta
+09-19T11:26:42      0      0        2          0       1       0  60.017 percona.dsns
+```
+
+```bash
+Checking if all tables can be checksummed ...
+Starting checksum ...
+
+            TS ERRORS  DIFFS     ROWS  DIFF_ROWS  CHUNKS SKIPPED    TIME TABLE
+09-19T11:30:33      0      3 11057786          0      38       0  85.151 alpha.beta
+09-19T11:31:33      0      0        2          0       1       0  60.021 percona.dsns
+```
+
+```bash
+Checking if all tables can be checksummed ...
+Starting checksum ...
+Differences on srv2
+TABLE CHUNK CNT_DIFF CRC_DIFF CHUNK_INDEX LOWER_BOUNDARY UPPER_BOUNDARY
+alpha.beta 2 -1 1 PRIMARY 1001 108529
+alpha.beta 11 -1 1 PRIMARY 2819155 3148900
+alpha.beta 20 0 1 PRIMARY 5774881 6102615
+
+Differences on ip-172-31-32-196
+TABLE CHUNK CNT_DIFF CRC_DIFF CHUNK_INDEX LOWER_BOUNDARY UPPER_BOUNDARY
+alpha.beta 2 -1 1 PRIMARY 1001 108529
+alpha.beta 11 -1 1 PRIMARY 2819155 3148900
+alpha.beta 20 0 1 PRIMARY 5774881 6102615
+```
+
+
+
+91. pt-table-sync
+```bash
+#!
+pt-table-sync \
+--config=/etc/percona-toolkit/percona-toolkit.conf \
+--print \
+--replicate percona.checksums h=127.0.0.1  \
+--dry-run
+
+# !
+pt-table-sync \
+--config=/etc/percona-toolkit/percona-toolkit.conf \
+--print \
+--replicate percona.checksums h=127.0.0.1  \
+--execute
+```
+
+```bash
+Checking if all tables can be checksummed ...
+Starting checksum ...
+            TS ERRORS  DIFFS     ROWS  DIFF_ROWS  CHUNKS SKIPPED    TIME TABLE
+09-19T12:37:59      0      0 11081917          0      36       0  87.178 alpha.beta
+09-19T12:38:59      0      0        2          0       1       0  60.020 percona.dsns
+```
+
+```bash
+testuser pts/1        172.31.36.135    Wed Sep 19 10:19 - 10:19  (00:00)
+testuser pts/1        172.31.36.135    Wed Sep 19 10:19 - 10:19  (00:00)
+testuser pts/1        172.31.40.219    Wed Sep 19 09:54 - 09:54  (00:00)
+testuser pts/0        133.237.7.66     Wed Sep 19 09:21   still logged in
+
+Wed Sep 19 12:40:13 UTC 2018
+```
+
+15:00
+21:40
